@@ -1,9 +1,12 @@
-black
 -e git+https://github.com/skellet0r/brownie@fix/banteg/multicall#egg=eth-brownie
+black
+fake_useragent
 flake8
 isort
 loguru
+numpy
+pandas
 pip-tools
 pre-commit
-pandas
-numpy
+requests[security,socks]
+stem
