@@ -135,7 +135,7 @@ interface IAugustusSwapper {
         uint8 referrer
     ) external payable;
 
-    function simpleBuy(
+    function simplBuy(
         address fromToken,
         address toToken,
         uint256 fromAmount,
