@@ -1,6 +1,9 @@
 compiler:
   solc:
     version: 0.6.12
+    optimizer:
+      enabled: true
+      runs: 600
     remappings:
       - "@aave=aave/protocol-v2@1.0.1"
       - "@openzeppelin=OpenZeppelin/openzeppelin-contracts@3.1.0"
