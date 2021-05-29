@@ -120,14 +120,7 @@ swap_io_pairs = list(it.permutations(range(3), r=2))
 io_reverse_lookup = {idx: addr for idx, addr in zip(range(3), crypto_swap_coin_addrs)}
 
 
-@retry(
-    (concurrent.futures.TimeoutError, TooManyRequests),
-    delay=10,
-    max_delay=60,
-    jitter=5,
-    logger=logger,
-)
-def arbitrage_curve():
+def get_crypto_swap_io():
     balances = get_crypto_swap_balances()
     multicall_results = []
 
@@ -143,6 +136,18 @@ def arbitrage_curve():
                 min_dy = call(CRYPTO_SWAP).get_dy(i, j, dx)
                 multicall_results.append([i, j, dx, min_dy])
     logger.debug(f"Finished call to multicall2 in {time.time() - start_time:.2f}")
+    return multicall_results
+
+
+@retry(
+    (concurrent.futures.TimeoutError, TooManyRequests),
+    delay=10,
+    backoff=1.2,
+    logger=logger,
+)
+def arbitrage_curve(crypto_swap_io):
+
+    multicall_results = crypto_swap_io
 
     # make calls to paraswap api checking for the best routes
     # min dy is the output of the curve swap
@@ -188,8 +193,9 @@ def arbitrage_curve():
 def main():
     for block in chain.new_blocks():
         logger.opt(colors=True).info(f"New block mined: <c>{block['number']}</>")
-        data = arbitrage_curve()
-        profit_margin = data["profit"].max()
+        crypto_swap_io = get_crypto_swap_io()
+        curve_df = arbitrage_curve(crypto_swap_io)
+        profit_margin = curve_df["profit"].max()
         color = "<r>" if profit_margin < 0 else "<g>"
         logger.opt(colors=True).info(
             f"Arbitrage Curve Net Profit Margin: {color}{profit_margin:.2%}</>"
