@@ -1,0 +1,9 @@
+black
+-e git+https://github.com/skellet0r/brownie@fix/banteg/multicall#egg=eth-brownie
+flake8
+isort
+loguru
+pip-tools
+pre-commit
+pandas
+numpy

@@ -1,0 +1,10 @@
+compiler:
+  solc:
+    version: 0.6.12
+    remappings:
+      - "@aave=aave/protocol-v2@1.0.1"
+      - "@openzeppelin=OpenZeppelin/openzeppelin-contracts@3.1.0"
+
+dependencies:
+  - aave/protocol-v2@1.0.1
+  - OpenZeppelin/openzeppelin-contracts@3.1.0
