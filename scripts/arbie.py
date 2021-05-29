@@ -1,19 +1,31 @@
-import requests
-import pandas as pd
-from pathlib import Path
-from loguru import logger
-import sys
 import itertools as it
+import sys
+from pathlib import Path
 
+import pandas as pd
+import requests
+from brownie import interface
+from loguru import logger
 
 PROJECT_DIR = Path(__file__).parent.parent
+
+# 1 = Ethereum Mainnet
 TOKENS_LIST_URL = "https://apiv4.paraswap.io/v2/tokens/1"
 PRICES_URL = "https://apiv4.paraswap.io/v2/prices"
 TX_BUIDLER_URL = "https://apiv4.paraswap.io/v2/transactions/1"
 
+# Contract Addrs
 TRICRYPTO_SWAP_ADDR = "0x80466c64868E1ab14a1Ddf27A676C3fcBE638Fe5"
 MULTICALL2_ADDR = "0x5BA1e12693Dc8F9c48aAD8770482f4739bEeD696"
-AUGUSTUSSWAPPER = "0x1bD435F3C054b6e901B7b108a0ab7617C808677b"
+AUGUSTUSSWAPPER_ADDR = "0x1bD435F3C054b6e901B7b108a0ab7617C808677b"
+LENDING_POOL_ADDR_PROVIDER_ADDR = "0xB53C1a33016B2DC2fF3653530bfF1848a515c8c5"
+
+# Contracts
+LENDING_POOL_ADDR_PROVIDER = interface.ILendingPoolAddressesProvider(
+    LENDING_POOL_ADDR_PROVIDER_ADDR
+)
+LENDING_POOL = interface.ILendingPool(LENDING_POOL_ADDR_PROVIDER.getLendingPool())
+AUGUSTUSSWAPPER = interface.IAugustusSwapper(AUGUSTUSSWAPPER_ADDR)
 
 # Logger Setup
 log_file = PROJECT_DIR.joinpath("logs/arbie.log")
@@ -35,15 +47,18 @@ else:
 
 
 # Helper functions
-
-
 def get_token_addresses(*symbols):
-    """Retrive a list of token addresses given their symbols"""
+    """Get a list of token addresses given their symbols"""
     mask = tokens_df.symbol.isin(symbols)
     return tokens_df[mask].index.tolist()
 
 
-def get_pair_price(_from, to, amount, side, network=1, **kwargs):
+def get_prices_data(_from, to, amount, side="SELL", network=1, **kwargs):
+    """Get pair price data from Paraswap API
+
+    BUY = Buy amount _from asset
+    SELL = Sell amount _from asset and get x to asset
+    """
     query_params = {
         "from": _from,
         "to": to,
@@ -52,7 +67,8 @@ def get_pair_price(_from, to, amount, side, network=1, **kwargs):
         "network": network,
     }
     query_params.update(kwargs)
-    return requests.get(PRICES_URL, params=query_params).json()
+    data = requests.get(PRICES_URL, params=query_params).json()
+    return data
 
 
 # Pool coins
