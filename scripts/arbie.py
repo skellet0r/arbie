@@ -3,13 +3,14 @@ import itertools as it
 import os
 import sys
 import time
-from functools import partial
+from functools import lru_cache, partial
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import requests
-from brownie import accounts, chain, interface, multicall
+from brownie import Contract, accounts, interface, multicall
+from brownie.convert import to_address
 from cachecontrol import CacheControl
 from loguru import logger
 from retry import retry
@@ -28,7 +29,7 @@ N_THREADS = 30
 # 1 = Ethereum Mainnet
 TOKENS_LIST_URL = "https://apiv4.paraswap.io/v2/tokens/1"
 PRICES_URL = "https://apiv4.paraswap.io/v2/prices"
-TX_BUIDLER_URL = "https://apiv4.paraswap.io/v2/transactions/1"
+TX_BUILDER_URL = "https://apiv4.paraswap.io/v2/transactions/1"
 
 # Contract Addrs
 TRICRYPTO_SWAP_ADDR = "0x80466c64868E1ab14a1Ddf27A676C3fcBE638Fe5"
@@ -40,9 +41,14 @@ LENDING_POOL_ADDR_PROVIDER_ADDR = "0xB53C1a33016B2DC2fF3653530bfF1848a515c8c5"
 LENDING_POOL_ADDR_PROVIDER = interface.ILendingPoolAddressesProvider(
     LENDING_POOL_ADDR_PROVIDER_ADDR
 )
-LENDING_POOL = interface.ILendingPool(LENDING_POOL_ADDR_PROVIDER.getLendingPool())
+LENDING_POOL = Contract(LENDING_POOL_ADDR_PROVIDER.getLendingPool())
 AUGUSTUSSWAPPER = interface.IAugustusSwapper(AUGUSTUSSWAPPER_ADDR)
 CRYPTO_SWAP = interface.CryptoSwap(TRICRYPTO_SWAP_ADDR)
+
+# Contract Constants
+with multicall(MULTICALL2_ADDR) as call:
+    AAVE_FLASH_LOAN_FEE = call(LENDING_POOL).FLASHLOAN_PREMIUM_TOTAL()
+AAVE_FLASH_LOAN_FEE /= 10_000  # .09%
 
 # Thread Pool initialized here to reduce overhead of constantly creating
 THREAD_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=N_THREADS)
@@ -67,6 +73,7 @@ if not tokens_fp.exists():
     tokens_fp.parent.mkdir(parents=True, exist_ok=True)
     tokens = requests.get(TOKENS_LIST_URL).json()["tokens"]
     tokens_df = pd.DataFrame.from_records(tokens, index="address")
+    tokens_df.index = tokens_df.index.map(to_address)
     tokens_df.to_csv(tokens_fp)
     logger.debug("Fetched and saved token list from paraswap api")
 else:
@@ -74,10 +81,14 @@ else:
 
 
 # Helper functions
+@lru_cache
 def get_token_addresses(*symbols):
     """Get a list of token addresses given their symbols"""
-    mask = tokens_df.symbol.isin(symbols)
-    return tokens_df[mask].index.tolist()
+    addresses = []
+    for symbol in symbols:
+        addr = tokens_df[tokens_df["symbol"] == symbol].index[0]
+        addresses.append(to_address(addr))
+    return addresses
 
 
 def get_prices_data(_from, to, amount, side="SELL", network=1, **kwargs):
@@ -119,6 +130,30 @@ def color(value):
     return "<g>" if value > 0 else "<r>"
 
 
+def build_paraswap_tx(data):
+
+    details = data["priceRoute"]["details"]
+
+    from_token = to_address(details["tokenFrom"])
+    to_token = to_address(details["tokenTo"])
+    body = {
+        "toDecimals": int(tokens_df.loc[to_token, "decimals"]),
+        "fromDecimals": int(tokens_df.loc[from_token, "decimals"]),
+        "referrer": "Arbie",
+        "userAddress": ACCOUNT.address,
+        "priceRoute": data["priceRoute"],
+        "destAmount": int(details["destAmount"]) * 1,  # No slippage
+        "srcAmount": int(details["srcAmount"]),
+        "destToken": to_token,
+        "srcToken": from_token,
+    }
+
+    headers = {"Content-Type": "application/json"}.update(SESSION.headers)
+    params = {"skipChecks": "true"}
+    tx = SESSION.post(TX_BUILDER_URL, json=body, params=params, headers=headers)
+    return tx.json()["data"]
+
+
 # Pool coins
 crypto_swap_coin_addrs = get_token_addresses("USDT", "WBTC", "WETH")
 swap_io_pairs = list(it.permutations(range(3), r=2))
@@ -136,7 +171,7 @@ def get_crypto_swap_io():
     with multicall(MULTICALL2_ADDR) as call:
         for i, j in swap_io_pairs:
             balance = balances[i]
-            for dx in np.linspace(balance // 200, balance // 3, 150):
+            for dx in np.linspace(balance // 200, balance // 3, 200):
                 dx = int(dx)
                 min_dy = call(CRYPTO_SWAP).get_dy(i, j, dx)
                 multicall_results.append([i, j, dx, min_dy])
@@ -244,23 +279,22 @@ def go_arbie():
     curve_row_idx = np.argmax(curve_df["profit"])
     gc_profit_margin = curve_df.iloc[curve_row_idx, -1]
     logger.opt(colors=True).info(
-        f"Greatest Curve Arb Profit Margin: {color(gc_profit_margin)}{gc_profit_margin:.2%}</>"
+        f"Curve Arb Profit Margin: {color(gc_profit_margin)}{gc_profit_margin:.2%}</>"
     )
 
     paraswap_df = arbitrage_paraswap(crypto_swap_io)
     paraswap_row_idx = np.argmax(paraswap_df["profit"])
     gp_profit_margin = paraswap_df.iloc[paraswap_row_idx, -1]
     logger.opt(colors=True).info(
-        f"Greatest Curve Arb Profit Margin: {color(gp_profit_margin)}{gp_profit_margin:.2%}</>"
+        f"Paraswap Arb Profit Margin: {color(gp_profit_margin)}{gp_profit_margin:.2%}</>"
     )
 
-    return (
-        paraswap_df.iloc[paraswap_row_idx]
-        if gp_profit_margin > gc_profit_margin
-        else curve_df.iloc[curve_row_idx]
-    )
+    if max(gc_profit_margin, gp_profit_margin) < AAVE_FLASH_LOAN_FEE:
+        logger.opt(colors=True).info(
+            f"<r>No opportunity available, profit margin is less than {AAVE_FLASH_LOAN_FEE:.2%}</>"
+        )
+        return
 
 
 def main():
-    for block in chain.new_blocks():
-        go_arbie()
+    pass
