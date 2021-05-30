@@ -53,7 +53,7 @@ LENDING_POOL_ADDR_PROVIDER_ADDR = "0xB53C1a33016B2DC2fF3653530bfF1848a515c8c5"
 LENDING_POOL_ADDR_PROVIDER = interface.ILendingPoolAddressesProvider(
     LENDING_POOL_ADDR_PROVIDER_ADDR
 )
-LENDING_POOL = Contract(LENDING_POOL_ADDR_PROVIDER.getLendingPool())
+LENDING_POOL = interface.IAAVELendingPool(LENDING_POOL_ADDR_PROVIDER.getLendingPool())
 AUGUSTUSSWAPPER = interface.IAugustusSwapper(AUGUSTUSSWAPPER_ADDR)
 CRYPTO_SWAP = interface.CryptoSwap(TRICRYPTO_SWAP_ADDR)
 ARBIE = ArbieV3.at(ARBIE_ADDR)
@@ -169,8 +169,11 @@ def build_paraswap_tx(data):
 
 # Pool coins
 crypto_swap_coin_addrs = get_token_addresses("USDT", "WBTC", "WETH")
-swap_io_pairs = list(it.permutations(range(3), r=2))
-io_reverse_lookup = {idx: addr for idx, addr in zip(range(3), crypto_swap_coin_addrs)}
+swap_io_pairs = list(it.permutations(range(len(crypto_swap_coin_addrs)), r=2))
+io_reverse_lookup = {
+    idx: addr
+    for idx, addr in zip(range(len(crypto_swap_coin_addrs)), crypto_swap_coin_addrs)
+}
 
 
 def get_crypto_swap_io():
