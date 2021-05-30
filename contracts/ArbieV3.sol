@@ -58,12 +58,12 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
         public
         FlashLoanReceiverBase(LENDING_POOL_ADDRESS_PROVIDER)
     {
-        address lending_pool = LENDING_POOL_ADDRESS_PROVIDER.getLendingPool();
+        address lendingPool = LENDING_POOL_ADDRESS_PROVIDER.getLendingPool();
         for (uint256 i = 0; i < coins.length; i++) {
             address coin = coins[i];
             IERC20(coin).approve(address(CRYPTO_SWAP), uint256(-1));
             IERC20(coin).approve(TOKEN_TRANSFER_PROxY_ADDR, uint256(-1));
-            IERC20(coin).approve(address(lending_pool), uint256(-1));
+            IERC20(coin).approve(lendingPool, uint256(-1));
         }
     }
 
@@ -128,7 +128,9 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
         require(block.timestamp < _deadline);
 
         CRYPTO_SWAP.exchange(_i, _j, _dx, _min_dy);
-        PARASWAP_ADDR.call(_paraswap_calldata);
+        (bool success, bytes memory returnData) =
+            PARASWAP_ADDR.call(_paraswap_calldata);
+        require(success);
 
         uint256 balance = IERC20(inputAsset).balanceOf(address(this));
         uint256 profit = balance.sub(amountToReturn);
@@ -151,7 +153,9 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
     ) public {
         require(block.timestamp < _deadline);
 
-        PARASWAP_ADDR.call(_paraswap_calldata);
+        (bool success, bytes memory returnData) =
+            PARASWAP_ADDR.call(_paraswap_calldata);
+        require(success);
         CRYPTO_SWAP.exchange(_i, _j, _dx, _min_dy);
 
         uint256 balance = IERC20(inputAsset).balanceOf(address(this));
