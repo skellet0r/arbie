@@ -116,6 +116,7 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
         return true;
     }
 
+    /// buy low on curve, sell high on paraswap
     function arbitrageCurve(
         uint256 _i,
         uint256 _j,
@@ -126,8 +127,8 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
     ) public {
         require(block.timestamp < _deadline);
 
-        PARASWAP_ADDR.call(_paraswap_calldata);
         CRYPTO_SWAP.exchange(_i, _j, _dx, _min_dy);
+        PARASWAP_ADDR.call(_paraswap_calldata);
 
         uint256 balance = IERC20(inputAsset).balanceOf(address(this));
         uint256 profit = balance.sub(amountToReturn);
@@ -139,6 +140,7 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
         amountToReturn = 0;
     }
 
+    /// buy low on paraswap, sell high on curve
     function arbitrageParaswap(
         uint256 _i,
         uint256 _j,
@@ -149,8 +151,8 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
     ) public {
         require(block.timestamp < _deadline);
 
-        CRYPTO_SWAP.exchange(_i, _j, _dx, _min_dy);
         PARASWAP_ADDR.call(_paraswap_calldata);
+        CRYPTO_SWAP.exchange(_i, _j, _dx, _min_dy);
 
         uint256 balance = IERC20(inputAsset).balanceOf(address(this));
         uint256 profit = balance.sub(amountToReturn);
