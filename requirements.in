@@ -1,4 +1,5 @@
 -e git+https://github.com/skellet0r/brownie@fix/banteg/multicall#egg=eth-brownie
+CacheControl
 black
 fake_useragent
 flake8
@@ -9,4 +10,5 @@ pandas
 pip-tools
 pre-commit
 requests[security,socks]
+retry
 stem
