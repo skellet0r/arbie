@@ -3,6 +3,7 @@ import itertools as it
 import os
 import sys
 import time
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -131,7 +132,7 @@ def get_crypto_swap_io():
     with multicall(MULTICALL2_ADDR) as call:
         for i, j in swap_io_pairs:
             balance = balances[i]
-            for dx in np.linspace(balance * 0.10, balance * 0.50, 200):
+            for dx in np.linspace(balance * 0.10, balance * 0.50, 150):
                 dx = int(dx)
                 min_dy = call(CRYPTO_SWAP).get_dy(i, j, dx)
                 multicall_results.append([i, j, dx, min_dy])
@@ -179,14 +180,62 @@ def arbitrage_curve(crypto_swap_io):
     sampling_df["results"] = results
     sampling_df["dest_amount"] = sampling_df["results"].map(
         lambda x: int(
-            float(
-                x.get("priceRoute", {}).get("bestRoute", [{}])[0].get("destAmount", 0)
-            )
+            float(x.get("priceRoute", {}).get("details", {}).get("destAmount", 0))
         )
     )
     sampling_df["profit"] = (
         sampling_df["dest_amount"] - sampling_df["dx"]
-    ) / sampling_df["dest_amount"]
+    ) / sampling_df["dx"]
+    return sampling_df
+
+
+@retry(
+    (concurrent.futures.TimeoutError, TooManyRequests),
+    delay=10,
+    backoff=1.2,
+    logger=logger,
+)
+def arbitrage_paraswap(crypto_swap_io):
+
+    multicall_results = crypto_swap_io
+
+    # make calls to paraswap api checking for the best routes
+    # min dy is the output of the curve swap
+    df = pd.DataFrame(multicall_results, columns=["i", "j", "dx", "min_dy"]).applymap(
+        unwrap_proxy
+    )
+
+    df["from"] = df["j"].replace(io_reverse_lookup)
+    df["to"] = df["i"].replace(io_reverse_lookup)
+
+    # take a random sample of 10% since we can't ping the paraswap api for all opportunities
+    sampling_df = df.sample(frac=0.10)
+
+    logger.debug(
+        f"Calling Prices API {sampling_df.shape[0]} time(s) with {N_THREADS} threads"
+    )
+    start_time = time.time()
+    # use threading to speed things up hopefully execution is <2-3 seconds
+    # real time: up to 10 seconds at worst
+    func = partial(get_prices_data, side="BUY")
+    futures = THREAD_POOL.map(
+        func,
+        sampling_df["from"].tolist(),
+        sampling_df["to"].tolist(),
+        sampling_df["dx"].tolist(),
+        timeout=10,
+    )
+    results = list(futures)
+    logger.debug(f"Finished making calls in {time.time() - start_time:.2f}s")
+    sampling_df["results"] = results
+    sampling_df["src_amount"] = sampling_df["results"].map(
+        lambda x: int(
+            float(x.get("priceRoute", {}).get("details", {}).get("srcAmount", 0))
+        )
+    )
+    sampling_df["profit"] = (
+        sampling_df["min_dy"] - sampling_df["src_amount"]
+    ) / sampling_df["src_amount"]
     return sampling_df
 
 
@@ -194,9 +243,9 @@ def main():
     for block in chain.new_blocks():
         logger.opt(colors=True).info(f"New block mined: <c>{block['number']}</>")
         crypto_swap_io = get_crypto_swap_io()
-        curve_df = arbitrage_curve(crypto_swap_io)
-        profit_margin = curve_df["profit"].max()
+        df = arbitrage_paraswap(crypto_swap_io)
+        profit_margin = df["profit"].max()
         color = "<r>" if profit_margin < 0 else "<g>"
         logger.opt(colors=True).info(
-            f"Arbitrage Curve Net Profit Margin: {color}{profit_margin:.2%}</>"
+            f"Arbitrage Paraswap Net Profit Margin: {color}{profit_margin:.2%}</>"
         )
