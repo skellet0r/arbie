@@ -54,7 +54,18 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
     address private inputAsset;
     uint256 private amountToReturn;
 
-    constructor() public FlashLoanReceiverBase(LENDING_POOL_ADDRESS_PROVIDER) {}
+    constructor(address[] memory coins)
+        public
+        FlashLoanReceiverBase(LENDING_POOL_ADDRESS_PROVIDER)
+    {
+        address lending_pool = LENDING_POOL_ADDRESS_PROVIDER.getLendingPool();
+        for (uint256 i = 0; i < coins.length; i++) {
+            address coin = coins[i];
+            IERC20(coin).approve(address(CRYPTO_SWAP), uint256(-1));
+            IERC20(coin).approve(TOKEN_TRANSFER_PROxY_ADDR, uint256(-1));
+            IERC20(coin).approve(address(lending_pool), uint256(-1));
+        }
+    }
 
     function executeOperation(
         address[] calldata assets,
@@ -65,26 +76,8 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
     ) external override returns (bool) {
         require(initiator == Ownable.owner());
 
-        // Set approvals
-        for (uint256 i = 0; i < assets.length; i++) {
-            address asset = assets[i];
-            uint256 amount = amounts[i];
-            uint256 premium = premiums[i];
-
-            if (i == 0) {
-                inputAsset = asset;
-                amountToReturn = amount.add(premium);
-            }
-
-            uint256 allowance =
-                IERC20(asset).allowance(address(this), address(CRYPTO_SWAP));
-
-            if (allowance == 0) {
-                IERC20(asset).approve(address(CRYPTO_SWAP), uint256(-1));
-                IERC20(asset).approve(TOKEN_TRANSFER_PROxY_ADDR, uint256(-1));
-                IERC20(asset).approve(address(LENDING_POOL), uint256(-1));
-            }
-        }
+        inputAsset = assets[0];
+        amountToReturn = amounts[0].add(premiums[0]);
 
         (
             bytes4 fnSig,
