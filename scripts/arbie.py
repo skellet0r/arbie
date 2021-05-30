@@ -102,7 +102,7 @@ def get_prices_data(_from, to, amount, side="SELL", network=1, **kwargs):
     elif resp.status_code == 429:
         raise TooManyRequests()
     else:
-        raise Exception()
+        raise Exception(resp.status_code)
 
 
 def get_crypto_swap_balances():
@@ -113,6 +113,10 @@ def get_crypto_swap_balances():
 
 def unwrap_proxy(obj):
     return getattr(obj, "__wrapped__", obj)
+
+
+def color(value):
+    return "<g>" if value > 0 else "<r>"
 
 
 # Pool coins
@@ -132,7 +136,7 @@ def get_crypto_swap_io():
     with multicall(MULTICALL2_ADDR) as call:
         for i, j in swap_io_pairs:
             balance = balances[i]
-            for dx in np.linspace(balance * 0.10, balance * 0.50, 150):
+            for dx in np.linspace(balance // 200, balance // 3, 150):
                 dx = int(dx)
                 min_dy = call(CRYPTO_SWAP).get_dy(i, j, dx)
                 multicall_results.append([i, j, dx, min_dy])
@@ -140,12 +144,6 @@ def get_crypto_swap_io():
     return multicall_results
 
 
-@retry(
-    (concurrent.futures.TimeoutError, TooManyRequests),
-    delay=10,
-    backoff=1.2,
-    logger=logger,
-)
 def arbitrage_curve(crypto_swap_io):
 
     multicall_results = crypto_swap_io
@@ -189,12 +187,6 @@ def arbitrage_curve(crypto_swap_io):
     return sampling_df
 
 
-@retry(
-    (concurrent.futures.TimeoutError, TooManyRequests),
-    delay=10,
-    backoff=1.2,
-    logger=logger,
-)
 def arbitrage_paraswap(crypto_swap_io):
 
     multicall_results = crypto_swap_io
@@ -239,13 +231,36 @@ def arbitrage_paraswap(crypto_swap_io):
     return sampling_df
 
 
+@retry(
+    (concurrent.futures.TimeoutError, TooManyRequests),
+    delay=15,
+    backoff=1.2,
+    logger=logger,
+)
+def go_arbie():
+    crypto_swap_io = get_crypto_swap_io()
+
+    curve_df = arbitrage_curve(crypto_swap_io)
+    curve_row_idx = np.argmax(curve_df["profit"])
+    gc_profit_margin = curve_df.iloc[curve_row_idx, -1]
+    logger.opt(colors=True).info(
+        f"Greatest Curve Arb Profit Margin: {color(gc_profit_margin)}{gc_profit_margin:.2%}</>"
+    )
+
+    paraswap_df = arbitrage_paraswap(crypto_swap_io)
+    paraswap_row_idx = np.argmax(paraswap_df["profit"])
+    gp_profit_margin = paraswap_df.iloc[paraswap_row_idx, -1]
+    logger.opt(colors=True).info(
+        f"Greatest Curve Arb Profit Margin: {color(gp_profit_margin)}{gp_profit_margin:.2%}</>"
+    )
+
+    return (
+        paraswap_df.iloc[paraswap_row_idx]
+        if gp_profit_margin > gc_profit_margin
+        else curve_df.iloc[curve_row_idx]
+    )
+
+
 def main():
     for block in chain.new_blocks():
-        logger.opt(colors=True).info(f"New block mined: <c>{block['number']}</>")
-        crypto_swap_io = get_crypto_swap_io()
-        df = arbitrage_paraswap(crypto_swap_io)
-        profit_margin = df["profit"].max()
-        color = "<r>" if profit_margin < 0 else "<g>"
-        logger.opt(colors=True).info(
-            f"Arbitrage Paraswap Net Profit Margin: {color}{profit_margin:.2%}</>"
-        )
+        go_arbie()
