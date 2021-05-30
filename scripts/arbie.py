@@ -9,9 +9,19 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import requests
-from brownie import Contract, accounts, interface, multicall
+from brownie import (
+    ZERO_ADDRESS,
+    ArbieV3,
+    Contract,
+    accounts,
+    chain,
+    interface,
+    multicall,
+    web3,
+)
 from brownie.convert import to_address
 from cachecontrol import CacheControl
+from hexbytes import HexBytes
 from loguru import logger
 from retry import retry
 
@@ -32,6 +42,7 @@ PRICES_URL = "https://apiv4.paraswap.io/v2/prices"
 TX_BUILDER_URL = "https://apiv4.paraswap.io/v2/transactions/1"
 
 # Contract Addrs
+ARBIE_ADDR = "0x3D09c5D6AE6e45d01C560342E11ef355C2763F01"
 TRICRYPTO_SWAP_ADDR = "0x80466c64868E1ab14a1Ddf27A676C3fcBE638Fe5"
 MULTICALL2_ADDR = "0x5BA1e12693Dc8F9c48aAD8770482f4739bEeD696"
 AUGUSTUSSWAPPER_ADDR = "0x1bD435F3C054b6e901B7b108a0ab7617C808677b"
@@ -44,11 +55,12 @@ LENDING_POOL_ADDR_PROVIDER = interface.ILendingPoolAddressesProvider(
 LENDING_POOL = Contract(LENDING_POOL_ADDR_PROVIDER.getLendingPool())
 AUGUSTUSSWAPPER = interface.IAugustusSwapper(AUGUSTUSSWAPPER_ADDR)
 CRYPTO_SWAP = interface.CryptoSwap(TRICRYPTO_SWAP_ADDR)
+ARBIE = ArbieV3.at(ARBIE_ADDR)
 
 # Contract Constants
 with multicall(MULTICALL2_ADDR) as call:
     AAVE_FLASH_LOAN_FEE = call(LENDING_POOL).FLASHLOAN_PREMIUM_TOTAL()
-AAVE_FLASH_LOAN_FEE /= 10_000  # .09%
+AAVE_FLASH_LOAN_FEE = AAVE_FLASH_LOAN_FEE.__wrapped__ / 10_000  # .09%
 
 # Thread Pool initialized here to reduce overhead of constantly creating
 THREAD_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=N_THREADS)
@@ -113,7 +125,7 @@ def get_prices_data(_from, to, amount, side="SELL", network=1, **kwargs):
     elif resp.status_code == 429:
         raise TooManyRequests()
     else:
-        raise Exception(resp.status_code)
+        return {}
 
 
 def get_crypto_swap_balances():
@@ -142,10 +154,10 @@ def build_paraswap_tx(data):
         "referrer": "Arbie",
         "userAddress": ACCOUNT.address,
         "priceRoute": data["priceRoute"],
-        "destAmount": int(details["destAmount"]) * 1,  # No slippage
-        "srcAmount": int(details["srcAmount"]),
-        "destToken": to_token,
-        "srcToken": from_token,
+        "destAmount": details["destAmount"],  # No slippage, * .99 = 1% slippage
+        "srcAmount": details["srcAmount"],
+        "destToken": details["tokenTo"],
+        "srcToken": details["tokenFrom"],
     }
 
     headers = {"Content-Type": "application/json"}.update(SESSION.headers)
@@ -171,7 +183,7 @@ def get_crypto_swap_io():
     with multicall(MULTICALL2_ADDR) as call:
         for i, j in swap_io_pairs:
             balance = balances[i]
-            for dx in np.linspace(balance // 200, balance // 3, 200):
+            for dx in np.linspace(balance // 200, balance // 3, 150):
                 dx = int(dx)
                 min_dy = call(CRYPTO_SWAP).get_dy(i, j, dx)
                 multicall_results.append([i, j, dx, min_dy])
@@ -295,6 +307,66 @@ def go_arbie():
         )
         return
 
+    if gc_profit_margin > gp_profit_margin:
+        # arbing curve
+        row = curve_df.iloc[curve_row_idx]
+        paraswap_calldata = HexBytes(build_paraswap_tx(row.results))
+        # calldata given to arbie through the lending pool
+        params = ARBIE.arbitrageCurve.encode_input(
+            int(row.i),
+            int(row.j),
+            int(row.dx),
+            int(row.min_dy),
+            chain.time() + 120,
+            paraswap_calldata,
+        )
+        # calldata sent to lending pool
+        # i > j > i
+        calldata = LENDING_POOL.flashLoan.encode_input(
+            ARBIE_ADDR,
+            [crypto_swap_coin_addrs[row.i]],
+            [int(row.dx)],
+            [0],
+            ZERO_ADDRESS,
+            params,
+            0,
+        )
+        gas_limit = web3.eth.estimate_gas(
+            {"from": ACCOUNT.address, "to": LENDING_POOL.address, "data": calldata}
+        )
+        logger.info(f"Estimated Gas Limit: {gas_limit}")
+    else:
+        # arbing paraswap
+        # arbing curve
+        row = paraswap_df.iloc[paraswap_row_idx]
+        paraswap_calldata = HexBytes(build_paraswap_tx(row.results))
+        params = ARBIE.arbitrageParaswap.encode_input(
+            int(row.i),
+            int(row.j),
+            int(row.dx),
+            int(row.min_dy),
+            chain.time() + 120,
+            paraswap_calldata,
+        )
+        # j > i > j
+        calldata = LENDING_POOL.flashLoan.encode_input(
+            ARBIE_ADDR,
+            [crypto_swap_coin_addrs[row.j]],
+            [int(row.src_amount)],
+            [0],
+            ZERO_ADDRESS,
+            params,
+            0,
+        )
+
+        gas_limit = web3.eth.estimate_gas(
+            {"from": ACCOUNT.address, "to": LENDING_POOL.address, "data": calldata}
+        )
+        logger.info(f"Estimated Gas Limit: {gas_limit}")
+
 
 def main():
-    pass
+    for _ in chain.new_blocks():
+        go_arbie()
+        logger.debug("Going to sleep for 10 seconds")
+        time.sleep(10)
