@@ -35,11 +35,12 @@ SESSION.headers.update({"User-Agent": "Arbie"})
 CACHED_SESSION = CacheControl(SESSION)
 RANDOM_STATE = 42
 N_THREADS = 30
+CHAIN_ID = 1
 
 # 1 = Ethereum Mainnet
-TOKENS_LIST_URL = "https://apiv4.paraswap.io/v2/tokens/1"
+TOKENS_LIST_URL = f"https://apiv4.paraswap.io/v2/tokens/{CHAIN_ID}"
 PRICES_URL = "https://apiv4.paraswap.io/v2/prices"
-TX_BUILDER_URL = "https://apiv4.paraswap.io/v2/transactions/1"
+TX_BUILDER_URL = f"https://apiv4.paraswap.io/v2/transactions/{CHAIN_ID}"
 
 # Contract Addrs
 ARBIE_ADDR = "0x3D09c5D6AE6e45d01C560342E11ef355C2763F01"
@@ -80,7 +81,7 @@ logger.add(
 )
 
 # Fetch the token list if it doesn't exist
-tokens_fp = PROJECT_DIR.joinpath("data/tokens.csv")
+tokens_fp = PROJECT_DIR.joinpath(f"data/tokens-chain-{CHAIN_ID}.csv")
 if not tokens_fp.exists():
     tokens_fp.parent.mkdir(parents=True, exist_ok=True)
     tokens = requests.get(TOKENS_LIST_URL).json()["tokens"]
