@@ -168,4 +168,9 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
         inputAsset = address(0);
         amountToReturn = 0;
     }
+
+    function withdrawToken(address _token) external {
+        uint256 balance = IERC20(_token).balanceOf(address(this));
+        IERC20(_token).transfer(Ownable.owner(), balance);
+    }
 }
