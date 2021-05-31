@@ -11,6 +11,7 @@ import pandas as pd
 import requests
 from brownie import ArbieV3, accounts, chain, interface, multicall, web3
 from brownie.convert import to_address
+from brownie.network.gas.strategies import GasNowScalingStrategy, GasNowStrategy
 from cachecontrol import CacheControl
 from eth_abi import abi
 from hexbytes import HexBytes
@@ -33,6 +34,9 @@ CHAIN_ID = 1
 TOKENS_LIST_URL = f"https://apiv4.paraswap.io/v2/tokens/{CHAIN_ID}"
 PRICES_URL = "https://apiv4.paraswap.io/v2/prices"
 TX_BUILDER_URL = f"https://apiv4.paraswap.io/v2/transactions/{CHAIN_ID}"
+COIN_GECKO_API = (
+    "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies={}"
+)
 
 # Contract Addrs
 ARBIE_ADDR = "0x5CfB168f03f8185BD21a3d75f6887c6DCD2B1312"
@@ -59,6 +63,12 @@ ENCODE_TYP = "(bool,uint256,uint256,uint256,uint256,uint256,bytes)"
 
 # Thread Pool initialized here to reduce overhead of constantly creating
 THREAD_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=N_THREADS)
+
+TX_PARAMS = {
+    "from": ACCOUNT,
+    "gas_price": GasNowScalingStrategy("fast"),
+    "required_confs": 3,
+}
 
 
 class TooManyRequests(Exception):
@@ -130,6 +140,22 @@ def get_prices_data(_from, to, amount, side="SELL", network=CHAIN_ID, **kwargs):
         raise Exception(resp.status_code)
 
 
+def gas_limit_to_cost(gas_limit, address):
+    gas_price = GasNowStrategy("rapid").get_gas_price() / 10 ** 18  # in wei
+    row = tokens_df.loc[address]
+    symbol = row["symbol"]
+    if symbol in ("WETH", "ETH"):
+        return gas_limit * gas_price, symbol, 1
+    elif symbol == "WBTC":
+        resp = requests.get(COIN_GECKO_API.format("btc"))
+        btc_in_eth = resp.json()["ethereum"]["btc"]
+        return gas_price * gas_limit * btc_in_eth * 10 ** 8, symbol, row["decimals"]
+    elif symbol == "USDT":
+        resp = requests.get(COIN_GECKO_API.format("usd"))
+        usd_in_eth = resp.json()["ethereum"]["usd"]
+        return gas_price * gas_limit * usd_in_eth * 10 ** 6, symbol, row["decimals"]
+
+
 def unwrap_proxy(obj):
     return getattr(obj, "__wrapped__", obj)
 
@@ -138,14 +164,9 @@ def color(value):
     return "<g>" if value > AAVE_FLASH_LOAN_FEE else "<y>" if value > 0 else "<r>"
 
 
-def build_paraswap_tx(data, is_sell=False):
+def build_paraswap_tx(data):
 
     details = data["priceRoute"]["details"]
-
-    # means we are arbing curve and need to account for 1% slippage in
-    # our return amount
-    if is_sell:
-        details["destAmount"] = str(int(details["destAmount"]) * 0.99)
 
     from_token = to_address(details["tokenFrom"])
     to_token = to_address(details["tokenTo"])
@@ -241,7 +262,6 @@ def arbitrage_curve(crypto_swap_io):
     sampling_df["results"] = results
     sampling_df["dest_amount"] = sampling_df["results"].map(
         lambda x: float(x["priceRoute"]["details"]["destAmount"])
-        * 0.99  # 1% slippage, need to account for in tx builder
     )
     sampling_df["profit"] = (
         sampling_df["dest_amount"] - sampling_df["dx"]
@@ -278,9 +298,7 @@ def arbitrage_paraswap(crypto_swap_io):
         func,
         sampling_df["from"].tolist(),
         sampling_df["to"].tolist(),
-        (
-            sampling_df["dx"] * 1.01
-        ).tolist(),  # 1% slippage, don't need to account for in tx builder
+        (sampling_df["dx"]).tolist(),
         timeout=10,
     )
     results = list(futures)
@@ -319,7 +337,7 @@ def go_arbie():
                 int(row.j),
                 int(row.dx),
                 int(row.min_dy),
-                chain.time() + 180,
+                chain.time() + 120,
                 paraswap_calldata,
             ],
         )
@@ -334,13 +352,13 @@ def go_arbie():
             params,
             0,
         )
-        if web3.eth.get_block_number() > row.results["priceRoute"]["blockNumber"]:
-            logger.opt(colors=True).warning("<y>Invalid block number</>")
-            return
         gas_limit = web3.eth.estimate_gas(
             {"from": ACCOUNT.address, "to": LENDING_POOL.address, "data": calldata}
         )
-        logger.info(f"Estimated Gas Limit: {gas_limit}")
+        cost, symbol, decimals = gas_limit_to_cost(gas_limit, row["to"])
+        logger.info(
+            f"Estimated Gas Limit: {gas_limit} - Estimated cost: {cost / 10 ** decimals:.5f} {symbol}"
+        )
 
     paraswap_df = arbitrage_paraswap(crypto_swap_io)
     paraswap_row_idx = np.argmax(paraswap_df["profit"])
@@ -362,7 +380,7 @@ def go_arbie():
                 int(row.j),
                 int(row.dx),
                 int(row.min_dy),
-                chain.time() + 180,
+                chain.time() + 120,
                 paraswap_calldata,
             ],
         )
@@ -383,13 +401,13 @@ def go_arbie():
             )
             return
 
-        if web3.eth.get_block_number() > row.results["priceRoute"]["blockNumber"]:
-            logger.opt(colors=True).warning("<y>Invalid block number</>")
-            return
         gas_limit = web3.eth.estimate_gas(
             {"from": ACCOUNT.address, "to": LENDING_POOL.address, "data": calldata}
         )
-        logger.info(f"Estimated Gas Limit: {gas_limit}")
+        cost, symbol, decimals = gas_limit_to_cost(gas_limit, row["from"])
+        logger.info(
+            f"Estimated Gas Limit: {gas_limit} - Estimated cost: {cost / 10 ** decimals:.5f} {symbol}"
+        )
 
 
 @retry(
