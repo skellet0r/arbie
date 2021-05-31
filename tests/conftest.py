@@ -69,3 +69,8 @@ def multicall2_addr():
 @pytest.fixture(scope="module")
 def arbie(alice, ArbieV3):
     return ArbieV3.deploy(crypto_swap_coins, {"from": alice})
+
+
+@pytest.fixture(autouse=True)
+def test_isolation(fn_isolation):
+    pass
