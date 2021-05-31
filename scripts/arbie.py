@@ -312,20 +312,7 @@ def go_arbie():
         f"Curve Arb Profit Margin: {color(gc_profit_margin)}{gc_profit_margin:.2%} ({curve_df.iloc[curve_row_idx, 2]})</>"
     )
 
-    paraswap_df = arbitrage_paraswap(crypto_swap_io)
-    paraswap_row_idx = np.argmax(paraswap_df["profit"])
-    gp_profit_margin = paraswap_df.iloc[paraswap_row_idx, -1]
-    logger.opt(colors=True).info(
-        f"Paraswap Arb Profit Margin: {color(gp_profit_margin)}{gp_profit_margin:.2%} ({paraswap_df.iloc[paraswap_row_idx, -2]})</>"
-    )
-
-    if max(gc_profit_margin, gp_profit_margin) < AAVE_FLASH_LOAN_FEE:
-        logger.opt(colors=True).info(
-            f"<r>No opportunity available, profit margin is less than {AAVE_FLASH_LOAN_FEE:.2%}</>"
-        )
-        return
-
-    if gc_profit_margin > gp_profit_margin:
+    if gc_profit_margin > AAVE_FLASH_LOAN_FEE:
         # arbing curve
         row = curve_df.iloc[curve_row_idx]
         paraswap_tx = build_paraswap_tx(row.results)
@@ -346,7 +333,7 @@ def go_arbie():
             [crypto_swap_coin_addrs[row.i]],
             [int(row.dx)],
             [0],
-            ACCOUNT.address,
+            ARBIE_ADDR,
             params,
             0,
         )
@@ -357,7 +344,15 @@ def go_arbie():
             {"from": ACCOUNT.address, "to": LENDING_POOL.address, "data": calldata}
         )
         logger.info(f"Estimated Gas Limit: {gas_limit}")
-    else:
+
+    paraswap_df = arbitrage_paraswap(crypto_swap_io)
+    paraswap_row_idx = np.argmax(paraswap_df["profit"])
+    gp_profit_margin = paraswap_df.iloc[paraswap_row_idx, -1]
+    logger.opt(colors=True).info(
+        f"Paraswap Arb Profit Margin: {color(gp_profit_margin)}{gp_profit_margin:.2%} ({paraswap_df.iloc[paraswap_row_idx, -2]})</>"
+    )
+
+    if gp_profit_margin > AAVE_FLASH_LOAN_FEE:
         # arbing paraswap
         row = paraswap_df.iloc[paraswap_row_idx]
         paraswap_tx = build_paraswap_tx(row.results)
@@ -376,10 +371,16 @@ def go_arbie():
             [crypto_swap_coin_addrs[row.j]],
             [int(row.src_amount)],
             [0],
-            ACCOUNT.address,
+            ARBIE_ADDR,
             params,
             0,
         )
+
+        if max(gc_profit_margin, gp_profit_margin) < AAVE_FLASH_LOAN_FEE:
+            logger.opt(colors=True).info(
+                f"<r>No opportunity available, profit margin is less than {AAVE_FLASH_LOAN_FEE:.2%}</>"
+            )
+            return
 
         if web3.eth.get_block_number() > row.results["priceRoute"]["blockNumber"]:
             logger.opt(colors=True).warning("<y>Invalid block number</>")
