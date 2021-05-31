@@ -1,6 +1,5 @@
 import concurrent.futures
 import itertools as it
-from logging import log
 import os
 import sys
 import time
@@ -10,16 +9,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import requests
-from brownie import (
-    ArbieV3,
-    accounts,
-    chain,
-    interface,
-    multicall,
-    web3,
-)
+from brownie import ArbieV3, accounts, chain, interface, multicall, web3
 from brownie.convert import to_address
 from cachecontrol import CacheControl
+from eth_abi import abi
 from hexbytes import HexBytes
 from loguru import logger
 from retry import retry
@@ -61,6 +54,8 @@ ARBIE = ArbieV3.at(ARBIE_ADDR)
 with multicall(MULTICALL2_ADDR) as call:
     AAVE_FLASH_LOAN_FEE = call(LENDING_POOL).FLASHLOAN_PREMIUM_TOTAL()
 AAVE_FLASH_LOAN_FEE = AAVE_FLASH_LOAN_FEE.__wrapped__ / 10_000  # .09%
+
+ENCODE_TYP = "(bool,uint256,uint256,uint256,uint256,uint256,bytes)"
 
 # Thread Pool initialized here to reduce overhead of constantly creating
 THREAD_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=N_THREADS)
@@ -316,13 +311,17 @@ def go_arbie():
         paraswap_tx = build_paraswap_tx(row.results)
         paraswap_calldata = HexBytes(paraswap_tx["data"])
         # calldata given to arbie through the lending pool
-        params = ARBIE.arbitrageCurve.encode_input(
-            int(row.i),
-            int(row.j),
-            int(row.dx),
-            int(row.min_dy),
-            chain.time() + 120,
-            paraswap_calldata,
+        params = abi.encode_single(
+            ENCODE_TYP,
+            [
+                True,
+                int(row.i),
+                int(row.j),
+                int(row.dx),
+                int(row.min_dy),
+                chain.time() + 180,
+                paraswap_calldata,
+            ],
         )
         # calldata sent to lending pool
         # i > j > i
@@ -331,7 +330,7 @@ def go_arbie():
             [crypto_swap_coin_addrs[row.i]],
             [int(row.dx)],
             [0],
-            ARBIE_ADDR,
+            ACCOUNT.address,
             params,
             0,
         )
@@ -355,13 +354,17 @@ def go_arbie():
         row = paraswap_df.iloc[paraswap_row_idx]
         paraswap_tx = build_paraswap_tx(row.results)
         paraswap_calldata = HexBytes(paraswap_tx["data"])
-        params = ARBIE.arbitrageParaswap.encode_input(
-            int(row.i),
-            int(row.j),
-            int(row.dx),
-            int(row.min_dy),
-            chain.time() + 120,
-            paraswap_calldata,
+        params = abi.encode_single(
+            ENCODE_TYP,
+            [
+                False,
+                int(row.i),
+                int(row.j),
+                int(row.dx),
+                int(row.min_dy),
+                chain.time() + 180,
+                paraswap_calldata,
+            ],
         )
         # j > i > j
         calldata = LENDING_POOL.flashLoan.encode_input(
@@ -369,7 +372,7 @@ def go_arbie():
             [crypto_swap_coin_addrs[row.j]],
             [int(row.src_amount)],
             [0],
-            ARBIE_ADDR,
+            ACCOUNT.address,
             params,
             0,
         )
