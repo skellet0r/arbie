@@ -1,4 +1,5 @@
 import pytest
+from brownie import Contract
 from brownie_tokens import MintableForkToken
 
 
@@ -29,17 +30,23 @@ crypto_swap_coins = [
 
 @pytest.fixture(scope="session")
 def usdt():
-    return MintableForkToken(crypto_swap_coins[0])
+    contract = Contract(crypto_swap_coins[0])
+    setattr(contract, "strip", lambda: crypto_swap_coins[0])
+    return MintableForkToken(contract)
 
 
 @pytest.fixture(scope="session")
 def wbtc():
-    return MintableForkToken(crypto_swap_coins[1])
+    contract = Contract(crypto_swap_coins[1])
+    setattr(contract, "strip", lambda: crypto_swap_coins[1])
+    return MintableForkToken(contract)
 
 
 @pytest.fixture(scope="session")
 def weth():
-    return MintableForkToken(crypto_swap_coins[2])
+    contract = Contract(crypto_swap_coins[2])
+    setattr(contract, "strip", lambda: crypto_swap_coins[2])
+    return MintableForkToken(contract)
 
 
 @pytest.fixture(scope="session")
@@ -90,7 +97,7 @@ def test_isolation(fn_isolation):
     pass
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def crypto_swap_balances(crypto_swap):
     def _crypto_swap_balances():
         return [crypto_swap.balances(i) for i in range(3)]
