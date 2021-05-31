@@ -11,4 +11,4 @@ compiler:
 dependencies:
   - aave/protocol-v2@1.0.1
   - OpenZeppelin/openzeppelin-contracts@3.1.0
-autofetch_sources: false
+autofetch_sources: true
