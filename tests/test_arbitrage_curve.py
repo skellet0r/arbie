@@ -1,39 +1,72 @@
-import pytest
-
-
-@pytest.fixture(scope="module", autouse=True)
-def setup(
+def test_arbing_curve(
     alice,
+    arbie,
+    augustus_swap,
     coins,
     crypto_swap,
-    crypto_swap_balances,
     token_transfer_proxy,
     usdt,
     wbtc,
-    router,
+    uniswap_router,
     get_pair,
 ):
-    for coin in coins:
-        # mint the same balances as the crypto_swap pool has
-        amount = 1_000_000_000 * 10 ** coin.decimals()  # a billion of each token
-        coin._mint_for_testing(alice, amount)
-        coin.approve(token_transfer_proxy, 2 ** 256 - 1, {"from": alice})
-        coin.approve(router, 2 ** 256 - 1, {"from": alice})
-        coin.approve(crypto_swap, 2 ** 256 - 1, {"from": alice})
-
-    # create favorable conditions for an arb (usdt > wbtc > usdt)
-    # first give the uniswap pool enough liquidity for a big trade
-
+    # add a bunch of liquidity to uniswap pair
     pair = get_pair(usdt, wbtc)
     # wbtc = coin_0, usdt = coin_1
     reserve_0, reserve_1, _ = pair.getReserves()
-    quote = router.quote(100 * 10 ** 8, reserve_0, reserve_1)
+    quote = uniswap_router.quote(100 * 10 ** 8, reserve_0, reserve_1)
+    usdt._mint_for_testing(pair, quote)
+    wbtc._mint_for_testing(pair, 100 * 10 ** 8)
+    pair.mint(alice, {"from": alice})
 
-    # add liquidity to the uniswap pool, given current market conditions
-    # this should be enough liquidity so we don't have to worry about changing conditions
-    # in the future
-    router.addLiquidity(
-        wbtc, usdt, 100 * 10 ** 8, quote, 0, 0, alice, 2 ** 32 - 1, {"from": alice}
+    for coin in coins:
+        # mint a bunch of tokens to alice
+        amount = 1_000_000 * 10 ** coin.decimals()  # a billion of each token
+        coin._mint_for_testing(alice, amount)
+        coin.approve(token_transfer_proxy, 2 ** 256 - 1, {"from": alice})
+        coin.approve(uniswap_router, 2 ** 256 - 1, {"from": alice})
+        coin.approve(pair, 2 ** 256 - 1, {"from": alice})
+        coin.approve(crypto_swap, 2 ** 256 - 1, {"from": alice})
+
+    wbtc_price = crypto_swap.price_oracle(0) // 10 ** 18
+    # swap usdt for ~100 wbtc
+    get_dy_before = crypto_swap.get_dy(0, 1, 100 * wbtc_price * 10 ** 6)
+    # deposit a bunch of wbtc into the crypto_pool, giving it a low price
+    crypto_swap.add_liquidity([0, 100_000 * 10 ** 8, 0], 0, {"from": alice})
+    # I should be able to get more wbtc now then I did before
+    assert crypto_swap.get_dy(0, 1, 100 * wbtc_price * 10 ** 6) > get_dy_before
+
+    # I should now be able to do a favorable arb (usdt > wbtc > usdt)
+    usdt_initial_amount = 100 * wbtc_price * 10 ** 6
+    # this is the amount out after the curve trade
+    min_dy = crypto_swap.get_dy(0, 1, 100 * wbtc_price * 10 ** 6)
+    # now selling on uniswap
+    reserve_0, reserve_1, _ = pair.getReserves()
+    usdt_amount_out = uniswap_router.getAmountOut(min_dy, reserve_0, reserve_1)
+
+    assert usdt_amount_out > usdt_initial_amount
+
+    usdt._mint_for_testing(arbie, usdt_initial_amount)
+    # craft the calldata for paraswap swapping on uniswap
+    paraswap_calldata = augustus_swap.swapOnUniswap.encode_input(
+        min_dy, usdt_amount_out, [wbtc, usdt], 0
     )
 
-    # deposit a bunch of wbtc into the crypto_pool, giving it a low price
+    param = arbie.arbitrageCurve.encode_input(
+        0, 1, usdt_initial_amount, min_dy, 2 ** 32 - 1, paraswap_calldata
+    )
+
+    balance_before = usdt.balanceOf(alice)
+    # now perform the arb
+    arbie.executeOperation(
+        [usdt],
+        [usdt_initial_amount],
+        [int(usdt_initial_amount * 1.0009)],
+        alice,
+        param,
+        {"from": alice},
+    )
+    # withdraw the left over
+    arbie.withdrawToken(usdt, {"from": alice})
+
+    assert usdt.balanceOf(alice) > balance_before
