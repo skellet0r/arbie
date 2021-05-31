@@ -1,6 +1,6 @@
 import os
 
-from brownie import PolygonArbieV3, accounts
+from brownie import ArbieV3, accounts
 from brownie.convert import to_address
 from brownie.network.gas.strategies import GasNowScalingStrategy
 from pathlib import Path
@@ -8,7 +8,7 @@ import requests
 import pandas as pd
 
 PROJECT_DIR = Path(__file__).parent.parent
-CHAIN_ID = 137
+CHAIN_ID = 1
 TOKENS_LIST_URL = f"https://apiv4.paraswap.io/v2/tokens/{CHAIN_ID}"
 
 
@@ -26,7 +26,7 @@ else:
 
 tx_params = {
     "from": accounts.add(os.getenv("PRIVATE_KEY")),
-    # "gas_price": GasNowScalingStrategy("fast"),
+    "gas_price": GasNowScalingStrategy("fast"),
 }
 
 # Helper functions
@@ -40,5 +40,5 @@ def get_token_addresses(*symbols):
 
 
 def main():
-    coins = get_token_addresses("DAI", "USDC", "USDT", "WBTC", "ETH")
-    PolygonArbieV3.deploy(coins, tx_params)
+    coins = get_token_addresses("USDT", "WBTC", "WETH")
+    ArbieV3.deploy(coins, tx_params)
