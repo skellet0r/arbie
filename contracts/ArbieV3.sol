@@ -74,7 +74,7 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
         address initiator,
         bytes calldata params
     ) external override returns (bool) {
-        require(initiator == Ownable.owner());
+        require(initiator == Ownable.owner()); // dev: initiator is not owner
 
         inputAsset = assets[0];
         amountToReturn = amounts[0].add(premiums[0]);
@@ -125,17 +125,17 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
         uint256 _deadline,
         bytes memory _paraswap_calldata
     ) public {
-        require(block.timestamp < _deadline);
+        require(block.timestamp < _deadline); // dev: deadline passed
 
         CRYPTO_SWAP.exchange(_i, _j, _dx, _min_dy);
         (bool success, bytes memory returnData) =
             PARASWAP_ADDR.call(_paraswap_calldata);
-        require(success);
+        require(success); // dev: call to paraswap failed
 
         uint256 balance = IERC20(inputAsset).balanceOf(address(this));
         uint256 profit = balance.sub(amountToReturn);
 
-        require(profit > 0);
+        require(profit > 0); // dev: no profit
         // trnasfer profit out and set storage variables to 0
         IERC20(inputAsset).transfer(Ownable.owner(), profit);
         inputAsset = address(0);
@@ -151,17 +151,17 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
         uint256 _deadline,
         bytes memory _paraswap_calldata
     ) public {
-        require(block.timestamp < _deadline);
+        require(block.timestamp < _deadline); // dev: deadline passed
 
         (bool success, bytes memory returnData) =
             PARASWAP_ADDR.call(_paraswap_calldata);
-        require(success);
+        require(success); // dev: call to paraswap failed
         CRYPTO_SWAP.exchange(_i, _j, _dx, _min_dy);
 
         uint256 balance = IERC20(inputAsset).balanceOf(address(this));
         uint256 profit = balance.sub(amountToReturn);
 
-        require(profit > 0);
+        require(profit > 0); // dev: no profit
         // trnasfer profit out and set storage variables to 0
         IERC20(inputAsset).transfer(Ownable.owner(), profit);
         inputAsset = address(0);
