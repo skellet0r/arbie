@@ -92,7 +92,7 @@ contract PolygonArbieV3 is FlashLoanReceiverBase, Ownable {
             );
 
         if (_isCurveArbitrage) {
-            ArbieV3.arbitrageCurve(
+            PolygonArbieV3.arbitrageCurve(
                 _i,
                 _j,
                 _dx,
@@ -101,7 +101,7 @@ contract PolygonArbieV3 is FlashLoanReceiverBase, Ownable {
                 _paraswap_calldata
             );
         } else {
-            ArbieV3.arbitrageParaswap(
+            PolygonArbieV3.arbitrageParaswap(
                 _i,
                 _j,
                 _dx,
