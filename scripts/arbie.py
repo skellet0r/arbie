@@ -360,7 +360,7 @@ def go_arbie():
         logger.info(
             f"Estimated Gas Limit: {gas_limit} - Estimated cost: {cost / 10 ** decimals:.5f} {symbol}"
         )
-        if row["dest_amount"] - (row["dx"] * 1.0009) - cost > 0:
+        if row["dest_amount"] - (row["dx"] * 1.0009) - (cost * 0.9) > 0:
             ACCOUNT.transfer(
                 LENDING_POOL, data=calldata, gas_limit=gas_limit, **TX_PARAMS
             )
@@ -407,7 +407,7 @@ def go_arbie():
         logger.info(
             f"Estimated Gas Limit: {gas_limit} - Estimated cost: {cost / 10 ** decimals:.5f} {symbol}"
         )
-        if row["min_dy"] - (row["dx"] * 1.0009) - cost > 0:
+        if row["min_dy"] - (row["src_amount"] * 1.0009) - (cost * 0.9) > 0:
             ACCOUNT.transfer(
                 LENDING_POOL, data=calldata, gas_limit=gas_limit, **TX_PARAMS
             )
