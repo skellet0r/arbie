@@ -1,5 +1,6 @@
 import concurrent.futures
 import itertools as it
+from logging import log
 import os
 import sys
 import time
@@ -84,6 +85,7 @@ logger.add(
     buffering=512,
     diagnose=False,
 )
+logger = logger.opt(colors=True)
 
 # Fetch the token list if it doesn't exist
 tokens_fp = PROJECT_DIR.joinpath(f"data/tokens-chain-{CHAIN_ID}.csv")
@@ -121,8 +123,7 @@ def get_prices_data(_from, to, amount, side="SELL", network=CHAIN_ID, **kwargs):
         "amount": amount,
         "side": side,
         "network": network,
-        "includeDEXS": "Aave2,Weth,Curve,Kyber,MultiPath,MegaPath,Compound,Bancor",  # noqa
-        "includeContractMethods": "simpleSwap,multiSwap,megaSwap,buy",  # noqa
+        "includeDEXS": "Uniswap,Sushiswap,Aave2,Curve,Kyber,MultiPath,MegaPath,Compound,Bancor",  # noqa
     }
     query_params.update(kwargs)
     resp = CACHED_SESSION.get(PRICES_URL, params=query_params)
@@ -144,9 +145,14 @@ def color(value):
     return "<g>" if value > AAVE_FLASH_LOAN_FEE else "<y>" if value > 0 else "<r>"
 
 
-def build_paraswap_tx(data):
+def build_paraswap_tx(data, is_sell=False):
 
     details = data["priceRoute"]["details"]
+
+    # means we are arbing curve and need to account for 1% slippage in
+    # our return amount
+    if is_sell:
+        details["destAmount"] = str(int(details["destAmount"]) * 0.99)
 
     from_token = to_address(details["tokenFrom"])
     to_token = to_address(details["tokenTo"])
@@ -156,8 +162,8 @@ def build_paraswap_tx(data):
         "referrer": "Arbie",
         "userAddress": ARBIE_ADDR,
         "priceRoute": data["priceRoute"],
-        "destAmount": int(details["destAmount"]),
-        "srcAmount": int(details["srcAmount"]),
+        "destAmount": details["destAmount"],  # need to account here
+        "srcAmount": details["srcAmount"],
         "destToken": details["tokenTo"],
         "srcToken": details["tokenFrom"],
     }
@@ -165,7 +171,12 @@ def build_paraswap_tx(data):
     headers = {"Content-Type": "application/json"}.update(SESSION.headers)
     params = {"skipChecks": "true"}
     tx = SESSION.post(TX_BUILDER_URL, json=body, params=params, headers=headers)
-    return tx.json()["data"]
+    if tx.ok:
+        return tx.json()
+    elif tx.status_code == 429:
+        raise TooManyRequests()
+    else:
+        raise Exception(tx.status_code)
 
 
 # Pool coins
@@ -193,7 +204,7 @@ def get_crypto_swap_io():
     with multicall(MULTICALL2_ADDR) as call:
         for i, j in swap_io_pairs:
             balance = balances[i]
-            for dx in np.linspace(balance // 250, balance // 3, 150):
+            for dx in np.linspace(balance // 500, balance // 250, 150):
                 dx = int(dx)
                 min_dy = call(CRYPTO_SWAP).get_dy(i, j, dx)
                 multicall_results.append([i, j, dx, min_dy])
@@ -202,6 +213,8 @@ def get_crypto_swap_io():
 
 
 def arbitrage_curve(crypto_swap_io):
+    # buy on curve sell on quickswap
+    # aave i > curve j > paraswap i
 
     multicall_results = crypto_swap_io
 
@@ -235,6 +248,7 @@ def arbitrage_curve(crypto_swap_io):
     sampling_df["results"] = results
     sampling_df["dest_amount"] = sampling_df["results"].map(
         lambda x: float(x["priceRoute"]["details"]["destAmount"])
+        * 0.99  # 1% slippage, need to account for in tx builder
     )
     sampling_df["profit"] = (
         sampling_df["dest_amount"] - sampling_df["dx"]
@@ -243,6 +257,8 @@ def arbitrage_curve(crypto_swap_io):
 
 
 def arbitrage_paraswap(crypto_swap_io):
+    # buy on paraswap sell on curve
+    # aave j > paraswap i > curve j
 
     multicall_results = crypto_swap_io
 
@@ -269,7 +285,9 @@ def arbitrage_paraswap(crypto_swap_io):
         func,
         sampling_df["from"].tolist(),
         sampling_df["to"].tolist(),
-        sampling_df["dx"].tolist(),
+        (
+            sampling_df["dx"] * 1.01
+        ).tolist(),  # 1% slippage, don't need to account for in tx builder
         timeout=10,
     )
     results = list(futures)
@@ -291,14 +309,14 @@ def go_arbie():
     curve_row_idx = np.argmax(curve_df["profit"])
     gc_profit_margin = curve_df.iloc[curve_row_idx, -1]
     logger.opt(colors=True).info(
-        f"Curve Arb Profit Margin: {color(gc_profit_margin)}{gc_profit_margin:.2%}</>"
+        f"Curve Arb Profit Margin: {color(gc_profit_margin)}{gc_profit_margin:.2%} ({curve_df.iloc[curve_row_idx, 2]})</>"
     )
 
     paraswap_df = arbitrage_paraswap(crypto_swap_io)
     paraswap_row_idx = np.argmax(paraswap_df["profit"])
     gp_profit_margin = paraswap_df.iloc[paraswap_row_idx, -1]
     logger.opt(colors=True).info(
-        f"Paraswap Arb Profit Margin: {color(gp_profit_margin)}{gp_profit_margin:.2%}</>"
+        f"Paraswap Arb Profit Margin: {color(gp_profit_margin)}{gp_profit_margin:.2%} ({paraswap_df.iloc[paraswap_row_idx, -2]})</>"
     )
 
     if max(gc_profit_margin, gp_profit_margin) < AAVE_FLASH_LOAN_FEE:
@@ -310,7 +328,8 @@ def go_arbie():
     if gc_profit_margin > gp_profit_margin:
         # arbing curve
         row = curve_df.iloc[curve_row_idx]
-        paraswap_calldata = HexBytes(build_paraswap_tx(row.results))
+        paraswap_tx = build_paraswap_tx(row.results)
+        paraswap_calldata = HexBytes(paraswap_tx["data"])
         # calldata given to arbie through the lending pool
         params = ARBIE.arbitrageCurve.encode_input(
             int(row.i),
@@ -340,9 +359,9 @@ def go_arbie():
         logger.info(f"Estimated Gas Limit: {gas_limit}")
     else:
         # arbing paraswap
-        # arbing curve
         row = paraswap_df.iloc[paraswap_row_idx]
-        paraswap_calldata = HexBytes(build_paraswap_tx(row.results))
+        paraswap_tx = build_paraswap_tx(row.results)
+        paraswap_calldata = HexBytes(paraswap_tx["data"])
         params = ARBIE.arbitrageParaswap.encode_input(
             int(row.i),
             int(row.j),
