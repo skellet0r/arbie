@@ -74,13 +74,11 @@ contract PolygonArbieV3 is FlashLoanReceiverBase, Ownable {
         address initiator,
         bytes calldata params
     ) external override returns (bool) {
-        require(initiator == Ownable.owner());
-
         inputAsset = assets[0];
         amountToReturn = amounts[0].add(premiums[0]);
 
         (
-            bytes4 fnSig,
+            bool _isCurveArbitrage,
             uint256 _i,
             uint256 _j,
             uint256 _dx,
@@ -90,11 +88,11 @@ contract PolygonArbieV3 is FlashLoanReceiverBase, Ownable {
         ) =
             abi.decode(
                 params,
-                (bytes4, uint256, uint256, uint256, uint256, uint256, bytes)
+                (bool, uint256, uint256, uint256, uint256, uint256, bytes)
             );
 
-        if (fnSig == CURVE_FN_SELECTOR) {
-            PolygonArbieV3.arbitrageCurve(
+        if (_isCurveArbitrage) {
+            ArbieV3.arbitrageCurve(
                 _i,
                 _j,
                 _dx,
@@ -102,8 +100,8 @@ contract PolygonArbieV3 is FlashLoanReceiverBase, Ownable {
                 _deadline,
                 _paraswap_calldata
             );
-        } else if (fnSig == PARASWAP_FN_SELECTOR) {
-            PolygonArbieV3.arbitrageParaswap(
+        } else {
+            ArbieV3.arbitrageParaswap(
                 _i,
                 _j,
                 _dx,
@@ -125,17 +123,17 @@ contract PolygonArbieV3 is FlashLoanReceiverBase, Ownable {
         uint256 _deadline,
         bytes memory _paraswap_calldata
     ) public {
-        require(block.timestamp < _deadline);
+        require(block.timestamp < _deadline); // dev: deadline passed
 
         CRYPTO_ZAP.exchange_underlying(_i, _j, _dx, _min_dy);
         (bool success, bytes memory returnData) =
             PARASWAP_ADDR.call(_paraswap_calldata);
-        require(success);
+        require(success); // dev: call to paraswap failed
 
         uint256 balance = IERC20(inputAsset).balanceOf(address(this));
         uint256 profit = balance.sub(amountToReturn);
 
-        require(profit > 0);
+        require(profit > 0); // dev: no profit
         // trnasfer profit out and set storage variables to 0
         IERC20(inputAsset).transfer(Ownable.owner(), profit);
         inputAsset = address(0);
@@ -151,17 +149,17 @@ contract PolygonArbieV3 is FlashLoanReceiverBase, Ownable {
         uint256 _deadline,
         bytes memory _paraswap_calldata
     ) public {
-        require(block.timestamp < _deadline);
+        require(block.timestamp < _deadline); // dev: deadline passed
 
         (bool success, bytes memory returnData) =
             PARASWAP_ADDR.call(_paraswap_calldata);
-        require(success);
+        require(success); // dev: call to paraswap failed
         CRYPTO_ZAP.exchange_underlying(_i, _j, _dx, _min_dy);
 
         uint256 balance = IERC20(inputAsset).balanceOf(address(this));
         uint256 profit = balance.sub(amountToReturn);
 
-        require(profit > 0);
+        require(profit > 0); // dev: no profit
         // trnasfer profit out and set storage variables to 0
         IERC20(inputAsset).transfer(Ownable.owner(), profit);
         inputAsset = address(0);
