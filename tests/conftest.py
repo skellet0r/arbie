@@ -96,3 +96,22 @@ def crypto_swap_balances(crypto_swap):
         return [crypto_swap.balances(i) for i in range(3)]
 
     return _crypto_swap_balances
+
+
+@pytest.fixture(scope="session")
+def uniswap_factory(interface):
+    return interface.IUniswapV2Factory("0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f")
+
+
+@pytest.fixture(scope="session")
+def uniswap_router(interface):
+    return interface.IUniswapV2Router02("0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D")
+
+
+@pytest.fixture(scope="session")
+def get_pair(interface, uniswap_factory):
+    def _get_pair(coin_a, coin_b):
+        pair_addr = uniswap_factory.getPair(coin_a, coin_b)
+        return interface.IUniswapV2Pair(pair_addr)
+
+    return _get_pair
