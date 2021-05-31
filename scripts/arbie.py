@@ -72,12 +72,17 @@ class TooManyRequests(Exception):
 
 
 # Logger Setup
-log_file = PROJECT_DIR.joinpath("logs/arbie.log")
+log_file = PROJECT_DIR.joinpath(f"logs/arbie-{CHAIN_ID}.log")
 log_format = "<g>{time}</> - <lvl>{level}</> - {message}"
 logger.remove()
 logger.add(sys.stdout, format=log_format)
 logger.add(
-    log_file, format=log_format, rotation="5 MB", compression="gz", buffering=512
+    log_file,
+    format=log_format,
+    rotation="5 MB",
+    compression="gz",
+    buffering=512,
+    diagnose=False,
 )
 
 # Fetch the token list if it doesn't exist
@@ -104,7 +109,7 @@ def get_token_addresses(*symbols):
     return addresses
 
 
-def get_prices_data(_from, to, amount, side="SELL", network=1, **kwargs):
+def get_prices_data(_from, to, amount, side="SELL", network=CHAIN_ID, **kwargs):
     """Get pair price data from Paraswap API
 
     BUY = Buy amount _from asset equivalent to get_dx
@@ -116,8 +121,8 @@ def get_prices_data(_from, to, amount, side="SELL", network=1, **kwargs):
         "amount": amount,
         "side": side,
         "network": network,
-        "includeDEXS": "Uniswap,Sushiswap,Aave2,Weth,Curve,Kyber,MultiPath,MegaPath,Compound,Bancor",  # noqa
-        "includeContractMethods": "simpleSwap,multiSwap,megaSwap,swapOnUniswap,buy,swapOnUniswapFork",  # noqa
+        "includeDEXS": "Aave2,Weth,Curve,Kyber,MultiPath,MegaPath,Compound,Bancor",  # noqa
+        "includeContractMethods": "simpleSwap,multiSwap,megaSwap,buy",  # noqa
     }
     query_params.update(kwargs)
     resp = CACHED_SESSION.get(PRICES_URL, params=query_params)
@@ -125,14 +130,10 @@ def get_prices_data(_from, to, amount, side="SELL", network=1, **kwargs):
         return resp.json()
     elif resp.status_code == 429:
         raise TooManyRequests()
+    elif resp.status_code == 400:
+        return {"priceRoute": {"details": {"srcAmount": 2 ** 256 - 1, "destAmount": 0}}}
     else:
-        return {}
-
-
-def get_crypto_swap_balances():
-    """Get the token balances of the crypto swap"""
-    with multicall(MULTICALL2_ADDR) as call:
-        return [call(CRYPTO_SWAP).balances(i) for i in range(3)]
+        raise Exception(resp.status_code)
 
 
 def unwrap_proxy(obj):
@@ -140,7 +141,7 @@ def unwrap_proxy(obj):
 
 
 def color(value):
-    return "<g>" if value > 0 else "<r>"
+    return "<g>" if value > AAVE_FLASH_LOAN_FEE else "<y>" if value > 0 else "<r>"
 
 
 def build_paraswap_tx(data):
@@ -153,10 +154,10 @@ def build_paraswap_tx(data):
         "toDecimals": int(tokens_df.loc[to_token, "decimals"]),
         "fromDecimals": int(tokens_df.loc[from_token, "decimals"]),
         "referrer": "Arbie",
-        "userAddress": ACCOUNT.address,
+        "userAddress": ARBIE_ADDR,
         "priceRoute": data["priceRoute"],
-        "destAmount": details["destAmount"],  # No slippage, * .99 = 1% slippage
-        "srcAmount": details["srcAmount"],
+        "destAmount": int(details["destAmount"]),
+        "srcAmount": int(details["srcAmount"]),
         "destToken": details["tokenTo"],
         "srcToken": details["tokenFrom"],
     }
@@ -176,22 +177,27 @@ io_reverse_lookup = {
 }
 
 
+def get_crypto_swap_balances():
+    """Get the token balances of the crypto swap"""
+    with multicall(MULTICALL2_ADDR) as call:
+        return [call(CRYPTO_SWAP).balances(i) for i in range(3)]
+
+
 def get_crypto_swap_io():
     balances = get_crypto_swap_balances()
     multicall_results = []
 
     # make calls to crypto_swap get_dy for 200 evenly spaced values
     # between [balances[i] / 10, balances[i] / 2]
-    logger.debug("Starting call to multicall2")
     start_time = time.time()
     with multicall(MULTICALL2_ADDR) as call:
         for i, j in swap_io_pairs:
             balance = balances[i]
-            for dx in np.linspace(balance // 200, balance // 3, 150):
+            for dx in np.linspace(balance // 250, balance // 3, 150):
                 dx = int(dx)
                 min_dy = call(CRYPTO_SWAP).get_dy(i, j, dx)
                 multicall_results.append([i, j, dx, min_dy])
-    logger.debug(f"Finished call to multicall2 in {time.time() - start_time:.2f}")
+    logger.debug(f"Multicall2 response time: {time.time() - start_time:.2f}")
     return multicall_results
 
 
@@ -225,12 +231,10 @@ def arbitrage_curve(crypto_swap_io):
         timeout=10,
     )
     results = list(futures)
-    logger.debug(f"Finished making calls in {time.time() - start_time:.2f}s")
+    logger.debug(f"API response time: {time.time() - start_time:.2f}s")
     sampling_df["results"] = results
     sampling_df["dest_amount"] = sampling_df["results"].map(
-        lambda x: int(
-            float(x.get("priceRoute", {}).get("details", {}).get("destAmount", 0))
-        )
+        lambda x: float(x["priceRoute"]["details"]["destAmount"])
     )
     sampling_df["profit"] = (
         sampling_df["dest_amount"] - sampling_df["dx"]
@@ -269,12 +273,10 @@ def arbitrage_paraswap(crypto_swap_io):
         timeout=10,
     )
     results = list(futures)
-    logger.debug(f"Finished making calls in {time.time() - start_time:.2f}s")
+    logger.debug(f"API response time: {time.time() - start_time:.2f}s")
     sampling_df["results"] = results
     sampling_df["src_amount"] = sampling_df["results"].map(
-        lambda x: int(
-            float(x.get("priceRoute", {}).get("details", {}).get("srcAmount", 0))
-        )
+        lambda x: float(x["priceRoute"]["details"]["srcAmount"])
     )
     sampling_df["profit"] = (
         sampling_df["min_dy"] - sampling_df["src_amount"]
@@ -282,12 +284,6 @@ def arbitrage_paraswap(crypto_swap_io):
     return sampling_df
 
 
-@retry(
-    (concurrent.futures.TimeoutError, TooManyRequests),
-    delay=15,
-    backoff=1.2,
-    logger=logger,
-)
 def go_arbie():
     crypto_swap_io = get_crypto_swap_io()
 
@@ -331,10 +327,13 @@ def go_arbie():
             [crypto_swap_coin_addrs[row.i]],
             [int(row.dx)],
             [0],
-            ZERO_ADDRESS,
+            ACCOUNT.address,
             params,
             0,
         )
+        if web3.eth.get_block_number() > row.results["priceRoute"]["blockNumber"]:
+            logger.opt(colors=True).warning("<y>Invalid block number</>")
+            return
         gas_limit = web3.eth.estimate_gas(
             {"from": ACCOUNT.address, "to": LENDING_POOL.address, "data": calldata}
         )
@@ -358,19 +357,27 @@ def go_arbie():
             [crypto_swap_coin_addrs[row.j]],
             [int(row.src_amount)],
             [0],
-            ZERO_ADDRESS,
+            ACCOUNT.address,
             params,
             0,
         )
 
+        if web3.eth.get_block_number() > row.results["priceRoute"]["blockNumber"]:
+            logger.opt(colors=True).warning("<y>Invalid block number</>")
+            return
         gas_limit = web3.eth.estimate_gas(
             {"from": ACCOUNT.address, "to": LENDING_POOL.address, "data": calldata}
         )
         logger.info(f"Estimated Gas Limit: {gas_limit}")
 
 
+@retry(
+    (concurrent.futures.TimeoutError, TooManyRequests),
+    delay=15,
+    backoff=1.2,
+    logger=logger,
+)
 def main():
-    for _ in chain.new_blocks():
+    for block in chain.new_blocks():
+        logger.opt(colors=True).info(f"New block mined <c>{block['number']}</>")
         go_arbie()
-        logger.debug("Going to sleep for 10 seconds")
-        time.sleep(10)
