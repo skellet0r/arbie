@@ -1,5 +1,6 @@
 import concurrent.futures
 import itertools as it
+from mmap import ALLOCATIONGRANULARITY
 import os
 import sys
 import time
@@ -65,7 +66,7 @@ ENCODE_TYP = "(bool,uint256,uint256,uint256,uint256,uint256,bytes)"
 THREAD_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=N_THREADS)
 
 TX_PARAMS = {
-    "from": ACCOUNT,
+    # "from": ACCOUNT,
     "gas_price": GasNowScalingStrategy("fast"),
     "required_confs": 3,
 }
@@ -145,7 +146,7 @@ def gas_limit_to_cost(gas_limit, address):
     row = tokens_df.loc[address]
     symbol = row["symbol"]
     if symbol in ("WETH", "ETH"):
-        return gas_limit * gas_price, symbol, 1
+        return gas_limit * gas_price * 10 ** 18, symbol, 18
     elif symbol == "WBTC":
         resp = requests.get(COIN_GECKO_API.format("btc"))
         btc_in_eth = resp.json()["ethereum"]["btc"]
@@ -359,6 +360,10 @@ def go_arbie():
         logger.info(
             f"Estimated Gas Limit: {gas_limit} - Estimated cost: {cost / 10 ** decimals:.5f} {symbol}"
         )
+        if row["dest_amount"] - (row["dx"] * 1.0009) - cost > 0:
+            ACCOUNT.transfer(
+                LENDING_POOL, data=calldata, gas_limit=gas_limit, **TX_PARAMS
+            )
 
     paraswap_df = arbitrage_paraswap(crypto_swap_io)
     paraswap_row_idx = np.argmax(paraswap_df["profit"])
@@ -395,12 +400,6 @@ def go_arbie():
             0,
         )
 
-        if max(gc_profit_margin, gp_profit_margin) < AAVE_FLASH_LOAN_FEE:
-            logger.opt(colors=True).info(
-                f"<r>No opportunity available, profit margin is less than {AAVE_FLASH_LOAN_FEE:.2%}</>"
-            )
-            return
-
         gas_limit = web3.eth.estimate_gas(
             {"from": ACCOUNT.address, "to": LENDING_POOL.address, "data": calldata}
         )
@@ -408,6 +407,10 @@ def go_arbie():
         logger.info(
             f"Estimated Gas Limit: {gas_limit} - Estimated cost: {cost / 10 ** decimals:.5f} {symbol}"
         )
+        if row["min_dy"] - (row["dx"] * 1.0009) - cost > 0:
+            ACCOUNT.transfer(
+                LENDING_POOL, data=calldata, gas_limit=gas_limit, **TX_PARAMS
+            )
 
 
 @retry(
@@ -420,3 +423,5 @@ def main():
     for block in chain.new_blocks():
         logger.opt(colors=True).info(f"New block mined <c>{block['number']}</>")
         go_arbie()
+        logger.debug("Sleeping for 5s")
+        time.sleep(5)
