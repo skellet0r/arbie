@@ -1,3 +1,4 @@
+from eth_abi import abi
 from hexbytes import HexBytes
 
 
@@ -55,19 +56,27 @@ def test_arbing_curve(
         min_dy, usdt_amount_out, [wbtc, usdt], 0
     )
 
-    param = arbie.arbitrageCurve.encode_input(
-        0, 1, usdt_initial_amount, min_dy, 2 ** 32 - 1, paraswap_calldata
+    typ = "(bool,uint256,uint256,uint256,uint256,uint256,bytes)"
+    param = abi.encode_single(
+        typ,
+        [
+            True,
+            0,
+            1,
+            usdt_initial_amount,
+            min_dy,
+            2 ** 32 - 1,
+            HexBytes(paraswap_calldata),
+        ],
     )
-    prepend = (1).to_bytes(32, "big")
-
     balance_before = usdt.balanceOf(alice)
     # now perform the arb
     arbie.executeOperation(
         [usdt],
         [usdt_initial_amount],
-        [int(usdt_initial_amount * 1.0009)],
+        [int(usdt_initial_amount * 0.0009)],
         alice,
-        HexBytes(prepend) + HexBytes(param)[4:],
+        param,
         {"from": alice},
     )
     # withdraw the left over
