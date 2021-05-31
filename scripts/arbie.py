@@ -11,9 +11,7 @@ import numpy as np
 import pandas as pd
 import requests
 from brownie import (
-    ZERO_ADDRESS,
     ArbieV3,
-    Contract,
     accounts,
     chain,
     interface,
