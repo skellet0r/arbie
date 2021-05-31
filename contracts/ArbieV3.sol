@@ -74,13 +74,11 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
         address initiator,
         bytes calldata params
     ) external override returns (bool) {
-        require(initiator == Ownable.owner()); // dev: initiator is not owner
-
         inputAsset = assets[0];
         amountToReturn = amounts[0].add(premiums[0]);
 
         (
-            bytes4 fnSig,
+            bool _isCurveArbitrage,
             uint256 _i,
             uint256 _j,
             uint256 _dx,
@@ -90,10 +88,10 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
         ) =
             abi.decode(
                 params,
-                (bytes4, uint256, uint256, uint256, uint256, uint256, bytes)
+                (bool, uint256, uint256, uint256, uint256, uint256, bytes)
             );
 
-        if (fnSig == CURVE_FN_SELECTOR) {
+        if (_isCurveArbitrage) {
             ArbieV3.arbitrageCurve(
                 _i,
                 _j,
@@ -102,7 +100,7 @@ contract ArbieV3 is FlashLoanReceiverBase, Ownable {
                 _deadline,
                 _paraswap_calldata
             );
-        } else if (fnSig == PARASWAP_FN_SELECTOR) {
+        } else {
             ArbieV3.arbitrageParaswap(
                 _i,
                 _j,
