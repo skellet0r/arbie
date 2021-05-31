@@ -28,9 +28,23 @@ crypto_swap_coins = [
 
 
 @pytest.fixture(scope="session")
-def coins():
-    """Mintable variants of TriCrypto Pool's coins"""
-    return [MintableForkToken(addr) for addr in crypto_swap_coins]
+def usdt():
+    return MintableForkToken(crypto_swap_coins[0])
+
+
+@pytest.fixture(scope="session")
+def wbtc():
+    return MintableForkToken(crypto_swap_coins[1])
+
+
+@pytest.fixture(scope="session")
+def weth():
+    return MintableForkToken(crypto_swap_coins[2])
+
+
+@pytest.fixture(scope="session")
+def coins(usdt, wbtc, weth):
+    return [usdt, wbtc, weth]
 
 
 @pytest.fixture(scope="session")
@@ -74,3 +88,11 @@ def arbie(alice, ArbieV3):
 @pytest.fixture(autouse=True)
 def test_isolation(fn_isolation):
     pass
+
+
+@pytest.fixture
+def crypto_swap_balances(crypto_swap):
+    def _crypto_swap_balances():
+        return [crypto_swap.balances(i) for i in range(3)]
+
+    return _crypto_swap_balances
