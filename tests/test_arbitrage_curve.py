@@ -1,3 +1,6 @@
+from hexbytes import HexBytes
+
+
 def test_arbing_curve(
     alice,
     arbie,
@@ -55,6 +58,7 @@ def test_arbing_curve(
     param = arbie.arbitrageCurve.encode_input(
         0, 1, usdt_initial_amount, min_dy, 2 ** 32 - 1, paraswap_calldata
     )
+    prepend = (1).to_bytes(32, "big")
 
     balance_before = usdt.balanceOf(alice)
     # now perform the arb
@@ -63,7 +67,7 @@ def test_arbing_curve(
         [usdt_initial_amount],
         [int(usdt_initial_amount * 1.0009)],
         alice,
-        param,
+        HexBytes(prepend) + HexBytes(param)[4:],
         {"from": alice},
     )
     # withdraw the left over
