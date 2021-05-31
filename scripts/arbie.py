@@ -302,7 +302,7 @@ def go_arbie():
     curve_row_idx = np.argmax(curve_df["profit"])
     gc_profit_margin = curve_df.iloc[curve_row_idx, -1]
     logger.opt(colors=True).info(
-        f"Curve Arb Profit Margin: {color(gc_profit_margin)}{gc_profit_margin:.2%} ({curve_df.iloc[curve_row_idx, 2]})</>"
+        f"Curve Arb Profit Margin: {color(gc_profit_margin)}{gc_profit_margin:.2%}</>"
     )
 
     if gc_profit_margin > AAVE_FLASH_LOAN_FEE:
@@ -346,7 +346,7 @@ def go_arbie():
     paraswap_row_idx = np.argmax(paraswap_df["profit"])
     gp_profit_margin = paraswap_df.iloc[paraswap_row_idx, -1]
     logger.opt(colors=True).info(
-        f"Paraswap Arb Profit Margin: {color(gp_profit_margin)}{gp_profit_margin:.2%} ({paraswap_df.iloc[paraswap_row_idx, -2]})</>"
+        f"Paraswap Arb Profit Margin: {color(gp_profit_margin)}{gp_profit_margin:.2%}</>"
     )
 
     if gp_profit_margin > AAVE_FLASH_LOAN_FEE:
