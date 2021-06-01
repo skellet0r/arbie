@@ -59,6 +59,7 @@ ARBIE = ArbieV3.at(ARBIE_ADDR)
 with multicall(MULTICALL2_ADDR) as call:
     AAVE_FLASH_LOAN_FEE = call(LENDING_POOL).FLASHLOAN_PREMIUM_TOTAL()
 AAVE_FLASH_LOAN_FEE = AAVE_FLASH_LOAN_FEE.__wrapped__ / 10_000  # .09%
+SLIPPAGE = 0.005
 
 ENCODE_TYP = "(bool,uint256,uint256,uint256,uint256,uint256,bytes)"
 
@@ -127,7 +128,7 @@ def get_prices_data(_from, to, amount, side="SELL", network=CHAIN_ID, **kwargs):
         "amount": amount,
         "side": side,
         "network": network,
-        "includeDEXS": "Uniswap,Sushiswap,Aave2,Curve,Kyber,MultiPath,MegaPath,Compound,Bancor",  # noqa
+        "includeDEXS": "Uniswap,Sushiswap",  # noqa
     }
     query_params.update(kwargs)
     resp = CACHED_SESSION.get(PRICES_URL, params=query_params)
@@ -142,7 +143,7 @@ def get_prices_data(_from, to, amount, side="SELL", network=CHAIN_ID, **kwargs):
 
 
 def gas_limit_to_cost(gas_limit, address):
-    gas_price = GasNowStrategy("rapid").get_gas_price() / 10 ** 18  # in wei
+    gas_price = GasNowStrategy("fast").get_gas_price() / 10 ** 18  # in wei
     row = tokens_df.loc[address]
     symbol = row["symbol"]
     if symbol in ("WETH", "ETH"):
@@ -165,9 +166,12 @@ def color(value):
     return "<g>" if value > AAVE_FLASH_LOAN_FEE else "<y>" if value > 0 else "<r>"
 
 
-def build_paraswap_tx(data):
+def build_paraswap_tx(data, is_arb_curve=False):
 
     details = data["priceRoute"]["details"]
+
+    if is_arb_curve:
+        details["destAmount"] = str(int(int(details["destAmount"]) * (1 - SLIPPAGE)))
 
     from_token = to_address(details["tokenFrom"])
     to_token = to_address(details["tokenTo"])
@@ -219,7 +223,7 @@ def get_crypto_swap_io():
     with multicall(MULTICALL2_ADDR) as call:
         for i, j in swap_io_pairs:
             balance = balances[i]
-            for dx in np.linspace(balance // 500, balance // 250, 150):
+            for dx in np.linspace(balance // 500, balance // 250, 100):
                 dx = int(dx)
                 min_dy = call(CRYPTO_SWAP).get_dy(i, j, dx)
                 multicall_results.append([i, j, dx, min_dy])
@@ -255,14 +259,16 @@ def arbitrage_curve(crypto_swap_io):
         get_prices_data,
         sampling_df["from"].tolist(),
         sampling_df["to"].tolist(),
-        sampling_df["min_dy"].tolist(),
+        sampling_df["min_dy"].tolist(),  # input amount
         timeout=10,
     )
     results = list(futures)
     logger.debug(f"API response time: {time.time() - start_time:.2f}s")
     sampling_df["results"] = results
     sampling_df["dest_amount"] = sampling_df["results"].map(
+        # need to account for in tx building
         lambda x: float(x["priceRoute"]["details"]["destAmount"])
+        * (1 - SLIPPAGE)
     )
     sampling_df["profit"] = (
         sampling_df["dest_amount"] - sampling_df["dx"]
@@ -299,7 +305,9 @@ def arbitrage_paraswap(crypto_swap_io):
         func,
         sampling_df["from"].tolist(),
         sampling_df["to"].tolist(),
-        (sampling_df["dx"]).tolist(),
+        # no need to account for in tx building call since
+        # we do so in our initial call
+        (sampling_df["dx"] * (1 + SLIPPAGE)).tolist(),
         timeout=10,
     )
     results = list(futures)
@@ -327,7 +335,7 @@ def go_arbie():
     if gc_profit_margin > AAVE_FLASH_LOAN_FEE:
         # arbing curve
         row = curve_df.iloc[curve_row_idx]
-        paraswap_tx = build_paraswap_tx(row.results)
+        paraswap_tx = build_paraswap_tx(row.results, True)
         paraswap_calldata = HexBytes(paraswap_tx["data"])
         # calldata given to arbie through the lending pool
         params = abi.encode_single(
@@ -360,7 +368,10 @@ def go_arbie():
         logger.info(
             f"Estimated Gas Limit: {gas_limit} - Estimated cost: {cost / 10 ** decimals:.5f} {symbol}"
         )
-        if row["dest_amount"] - (row["dx"] * 1.0009) - (cost * 0.9) > 0:
+        if (
+            row["dest_amount"] - (row["dx"] * (1 + AAVE_FLASH_LOAN_FEE)) - (cost * 0.95)
+            > 0
+        ):
             ACCOUNT.transfer(
                 LENDING_POOL, data=calldata, gas_limit=gas_limit, **TX_PARAMS
             )
@@ -407,14 +418,19 @@ def go_arbie():
         logger.info(
             f"Estimated Gas Limit: {gas_limit} - Estimated cost: {cost / 10 ** decimals:.5f} {symbol}"
         )
-        if row["min_dy"] - (row["src_amount"] * 1.0009) - (cost * 0.9) > 0:
+        if (
+            row["min_dy"]
+            - (row["src_amount"] * (1 + AAVE_FLASH_LOAN_FEE))
+            - (cost * 0.95)
+            > 0
+        ):
             ACCOUNT.transfer(
                 LENDING_POOL, data=calldata, gas_limit=gas_limit, **TX_PARAMS
             )
 
 
 @retry(
-    (concurrent.futures.TimeoutError, TooManyRequests),
+    (Exception),
     delay=15,
     backoff=1.2,
     logger=logger,
