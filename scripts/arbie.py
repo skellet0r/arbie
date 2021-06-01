@@ -59,7 +59,7 @@ ARBIE = ArbieV3.at(ARBIE_ADDR)
 with multicall(MULTICALL2_ADDR) as call:
     AAVE_FLASH_LOAN_FEE = call(LENDING_POOL).FLASHLOAN_PREMIUM_TOTAL()
 AAVE_FLASH_LOAN_FEE = AAVE_FLASH_LOAN_FEE.__wrapped__ / 10_000  # .09%
-SLIPPAGE = 0.005
+SLIPPAGE = 0.01
 
 ENCODE_TYP = "(bool,uint256,uint256,uint256,uint256,uint256,bytes)"
 
@@ -143,19 +143,21 @@ def get_prices_data(_from, to, amount, side="SELL", network=CHAIN_ID, **kwargs):
 
 
 def gas_limit_to_cost(gas_limit, address):
-    gas_price = GasNowStrategy("fast").get_gas_price() / 10 ** 18  # in wei
+    gas_price_eth = GasNowStrategy("fast").get_gas_price() / 10 ** 18  # in wei
     row = tokens_df.loc[address]
     symbol = row["symbol"]
     if symbol in ("WETH", "ETH"):
-        return gas_limit * gas_price * 10 ** 18, symbol, 18
+        return gas_limit * gas_price_eth * 10 ** 18, symbol, 18
     elif symbol == "WBTC":
         resp = requests.get(COIN_GECKO_API.format("btc"))
-        btc_in_eth = resp.json()["ethereum"]["btc"]
-        return gas_price * gas_limit * btc_in_eth * 10 ** 8, symbol, row["decimals"]
+        eth_to_btc = resp.json()["ethereum"]["btc"]
+        decimals = row["decimals"]
+        return gas_price_eth * gas_limit * eth_to_btc * 10 ** decimals, symbol, decimals
     elif symbol == "USDT":
         resp = requests.get(COIN_GECKO_API.format("usd"))
-        usd_in_eth = resp.json()["ethereum"]["usd"]
-        return gas_price * gas_limit * usd_in_eth * 10 ** 6, symbol, row["decimals"]
+        eth_to_usd = resp.json()["ethereum"]["usd"]
+        decimals = row["decimals"]
+        return gas_price_eth * gas_limit * eth_to_usd * 10 ** decimals, symbol, decimals
 
 
 def unwrap_proxy(obj):
@@ -368,10 +370,7 @@ def go_arbie():
         logger.info(
             f"Estimated Gas Limit: {gas_limit} - Estimated cost: {cost / 10 ** decimals:.5f} {symbol}"
         )
-        if (
-            row["dest_amount"] - (row["dx"] * (1 + AAVE_FLASH_LOAN_FEE)) - (cost * 0.95)
-            > 0
-        ):
+        if row["dest_amount"] - (row["dx"] * (1 + AAVE_FLASH_LOAN_FEE)) - cost > 0:
             ACCOUNT.transfer(
                 LENDING_POOL, data=calldata, gas_limit=gas_limit, **TX_PARAMS
             )
@@ -418,12 +417,7 @@ def go_arbie():
         logger.info(
             f"Estimated Gas Limit: {gas_limit} - Estimated cost: {cost / 10 ** decimals:.5f} {symbol}"
         )
-        if (
-            row["min_dy"]
-            - (row["src_amount"] * (1 + AAVE_FLASH_LOAN_FEE))
-            - (cost * 0.95)
-            > 0
-        ):
+        if row["min_dy"] - (row["src_amount"] * (1 + AAVE_FLASH_LOAN_FEE)) - cost > 0:
             ACCOUNT.transfer(
                 LENDING_POOL, data=calldata, gas_limit=gas_limit, **TX_PARAMS
             )
