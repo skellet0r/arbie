@@ -16,3 +16,4 @@ Improvements to be made:
 - Slippage ... can she better account for slippage
   - Math overall should be checked
 - Gas accounting ... she should instantly convert her profit into ETH to enable perpetual arbitrage
+- We are no longer limited to the assets we have when arbitraging paraswap, we can technically start with any reserve asset on AAVE and end in the TriCryptoPool as long as we garner a profit
