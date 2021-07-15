@@ -1,4 +1,4 @@
-# ArbieV3
+# Arbie
 
 > Note: Arbie is for testing purposes only, and should not be used in a production environment without serious design considerations and optimizations.
 
